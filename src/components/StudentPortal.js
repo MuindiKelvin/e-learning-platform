@@ -174,21 +174,21 @@ function StudentPortal({ user, userRole }) {
 
 
   const loadAllAssessmentResults = async () => {
-  try {
-    const snapshot = await getDocs(collection(db, 'assessmentResults'));
-    const resultsData = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-    setAssessmentResults(resultsData);
-  } catch (error) {
-    console.error('Error loading all assessment results:', error);
-    if (error.code === 'permission-denied') {
-      console.warn('Permission denied loading all assessment results');
-      setAssessmentResults([]);
+    try {
+      const snapshot = await getDocs(collection(db, 'assessmentResults'));
+      const resultsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setAssessmentResults(resultsData);
+    } catch (error) {
+      console.error('Error loading all assessment results:', error);
+      if (error.code === 'permission-denied') {
+        console.warn('Permission denied loading all assessment results');
+        setAssessmentResults([]);
+      }
     }
-  }
-};
+  };
 
   const loadAssessments = async () => {
     try {
@@ -822,7 +822,7 @@ function StudentPortal({ user, userRole }) {
             </div>
           )}
 
-          {/* Progress Tab */}
+          {/* Progress Tab - FIXED VERSION */}
           {activeTab === 'progress' && (
             <div className="row">
               <div className="col-lg-8">
@@ -832,26 +832,31 @@ function StudentPortal({ user, userRole }) {
                   </div>
                   <div className="card-body">
                     {getEnrolledCourses().length > 0 ? (
-                      getEnrolledCourses().map(course => (
-                        <div key={course.id} className="mb-4">
-                          <div className="d-flex justify-content-between align-items-center mb-2">
-                            <h6 className="mb-0">{course.title}</h6>
-                            <span className="badge bg-primary">{course.enrollmentProgress || 0}%</span>
+                      getEnrolledCourses().map(course => {
+                        const enrollment = enrollments.find(e => e.courseId === course.id);
+                        return (
+                          <div key={course.id} className="mb-4">
+                            <div className="d-flex justify-content-between align-items-center mb-2">
+                              <h6 className="mb-0">{course.title}</h6>
+                              <span className="badge bg-primary">{course.enrollmentProgress || 0}%</span>
+                            </div>
+                            <div className="progress mb-2">
+                              <div 
+                                className="progress-bar" 
+                                style={{ width: `${course.enrollmentProgress || 0}%` }}
+                              ></div>
+                            </div>
+                            <small className="text-muted">
+                              Enrolled: {enrollment?.enrolledAt?.toDate ? 
+                                enrollment.enrolledAt.toDate().toLocaleDateString() : 
+                                enrollment?.enrolledAt ? 
+                                  new Date(enrollment.enrolledAt).toLocaleDateString() :
+                                  'Unknown date'
+                              }
+                            </small>
                           </div>
-                          <div className="progress mb-2">
-                            <div 
-                              className="progress-bar" 
-                              style={{ width: `${course.enrollmentProgress || 0}%` }}
-                            ></div>
-                          </div>
-                          <small className="text-muted">
-                            Enrolled: {course.enrollment?.enrolledAt?.toDate ? 
-                              course.enrollment.enrolledAt.toDate().toLocaleDateString() : 
-                              'Unknown date'
-                            }
-                          </small>
-                        </div>
-                      ))
+                        );
+                      })
                     ) : (
                       <div className="text-center py-4">
                         <div className="mb-2" style={{ fontSize: '2rem' }}>📊</div>
