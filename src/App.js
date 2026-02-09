@@ -1,4 +1,3 @@
-// src/components/App.js
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase';
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -8,6 +7,7 @@ import Dashboard from './components/Dashboard';
 import CourseManager from './components/CourseManager';
 import StudentPortal from './components/StudentPortal';
 import Analytics from './components/Analytics';
+import CertificateManager from './components/CertificateManager';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -86,7 +86,8 @@ function App() {
         { key: 'dashboard', label: '📊 Dashboard', icon: '🏠' },
         { key: 'courses', label: '📚 Course Management', icon: '📖' },
         { key: 'analytics', label: '📈 Analytics', icon: '📊' },
-        { key: 'students', label: '👥 Student Portal', icon: '🎓' }
+        { key: 'students', label: '👥 Student Portal', icon: '🎓' },
+        { key: 'certificates', label: '🎓 Certificates', icon: '📜' }
       );
     } else if (userRole === 'teacher') {
       navItems.push(
@@ -112,6 +113,8 @@ function App() {
         return <StudentPortal user={user} userRole={userRole} />;
       case 'analytics':
         return <Analytics user={user} userRole={userRole} />;
+      case 'certificates':
+        return <CertificateManager user={user} userRole={userRole} />;
       default:
         return <Dashboard user={user} userRole={userRole} setCurrentView={setCurrentView} />;
     }

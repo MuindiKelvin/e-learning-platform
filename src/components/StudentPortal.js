@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
 import { 
   collection, 
@@ -17,6 +17,7 @@ function StudentPortal({ user, userRole }) {
   const [enrollments, setEnrollments] = useState([]);
   const [assessments, setAssessments] = useState([]);
   const [assessmentResults, setAssessmentResults] = useState([]);
+  const [certificates, setCertificates] = useState([]);
   const [currentAssessment, setCurrentAssessment] = useState(null);
   const [assessmentAnswers, setAssessmentAnswers] = useState({});
   const [loading, setLoading] = useState(true);
@@ -26,6 +27,9 @@ function StudentPortal({ user, userRole }) {
   const [showAssessment, setShowAssessment] = useState(false);
   const [assessmentTimer, setAssessmentTimer] = useState(0);
   const [timerInterval, setTimerInterval] = useState(null);
+  const [showCertificateModal, setShowCertificateModal] = useState(false);
+  const [selectedCertificate, setSelectedCertificate] = useState(null);
+  const certificateRef = useRef(null);
 
   const [enrollmentForm, setEnrollmentForm] = useState({
     studentName: '',
@@ -69,10 +73,10 @@ function StudentPortal({ user, userRole }) {
           loadCourses(),
           loadEnrollments(),
           loadAssessments(),
-          loadAssessmentResults()
+          loadAssessmentResults(),
+          loadCertificates()
         ]);
       } else if (userRole === 'admin' || userRole === 'teacher') {
-        // For admin/teacher viewing student management
         await Promise.all([
           loadCourses(),
           loadAllEnrollments(),
@@ -172,7 +176,6 @@ function StudentPortal({ user, userRole }) {
     }
   };
 
-
   const loadAllAssessmentResults = async () => {
     try {
       const snapshot = await getDocs(collection(db, 'assessmentResults'));
@@ -186,6 +189,29 @@ function StudentPortal({ user, userRole }) {
       if (error.code === 'permission-denied') {
         console.warn('Permission denied loading all assessment results');
         setAssessmentResults([]);
+      }
+    }
+  };
+
+  const loadCertificates = async () => {
+    try {
+      if (userRole === 'student') {
+        const certificatesQuery = query(
+          collection(db, 'certificates'),
+          where('studentId', '==', user.uid)
+        );
+        const snapshot = await getDocs(certificatesQuery);
+        const certificatesData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setCertificates(certificatesData);
+      }
+    } catch (error) {
+      console.error('Error loading certificates:', error);
+      if (error.code === 'permission-denied') {
+        console.warn('Permission denied loading certificates');
+        setCertificates([]);
       }
     }
   };
@@ -210,7 +236,6 @@ function StudentPortal({ user, userRole }) {
   const handleEnrollment = async (e) => {
     e.preventDefault();
     try {
-      // Validate required fields
       if (!enrollmentForm.studentName || !enrollmentForm.studentId || !enrollmentForm.email) {
         alert('Please fill in all required fields.');
         return;
@@ -257,7 +282,6 @@ function StudentPortal({ user, userRole }) {
       return;
     }
     
-    // Check if student has already completed this assessment
     if (hasCompletedAssessment(assessment.id)) {
       alert('You have already completed this assessment. Each assessment can only be taken once.');
       return;
@@ -265,7 +289,7 @@ function StudentPortal({ user, userRole }) {
     
     setCurrentAssessment(assessment);
     setAssessmentAnswers({});
-    setAssessmentTimer(assessment.timeLimit * 60); // Convert minutes to seconds
+    setAssessmentTimer(assessment.timeLimit * 60);
     setShowAssessment(true);
   };
 
@@ -311,7 +335,6 @@ function StudentPortal({ user, userRole }) {
       setAssessmentAnswers({});
       setAssessmentTimer(0);
       
-      // Reload assessment results to update the UI
       loadAssessmentResults();
       
       alert(`🎉 Assessment completed! Your score: ${score}/${currentAssessment.totalPoints || 0} (${percentage.toFixed(1)}%)`);
@@ -338,8 +361,10 @@ function StudentPortal({ user, userRole }) {
         const course = courses.find(c => c.id === enrollment.courseId);
         return course ? { 
           ...course, 
-          enrollmentId: enrollment.id, // Store the enrollment document ID
-          enrollmentProgress: enrollment.progress || 0 
+          enrollmentId: enrollment.id,
+          enrollmentProgress: enrollment.progress || 0,
+          completed: enrollment.completed || false,
+          completedAt: enrollment.completedAt
         } : null;
       })
       .filter(course => course !== null);
@@ -351,14 +376,10 @@ function StudentPortal({ user, userRole }) {
   };
 
   const getAvailableAssessments = () => {
-    // Get all approved enrollments for this student
     const approvedEnrollments = enrollments.filter(e => e.status === 'approved');
     const enrolledCourseIds = approvedEnrollments.map(e => e.courseId);
-    
-    // Get assessment IDs that the student has already completed
     const completedAssessmentIds = assessmentResults.map(result => result.assessmentId);
     
-    // Filter assessments to only show those for enrolled courses that haven't been completed
     return assessments.filter(assessment => 
       enrolledCourseIds.includes(assessment.courseId) &&
       !completedAssessmentIds.includes(assessment.id)
@@ -427,16 +448,27 @@ function StudentPortal({ user, userRole }) {
     }
   };
 
-  // Fixed Continue Learning handler
   const handleContinueLearning = async (course) => {
     try {
-      // Update progress logic here
       const newProgress = Math.min((course.enrollmentProgress || 0) + 10, 100);
-      await updateDoc(doc(db, 'enrollments', course.enrollmentId), {
-        progress: newProgress
-      });
+      const updateData = {
+        progress: newProgress,
+        lastActivity: new Date()
+      };
+      
+      if (newProgress === 100) {
+        updateData.completed = true;
+        updateData.completedAt = new Date();
+      }
+      
+      await updateDoc(doc(db, 'enrollments', course.enrollmentId), updateData);
       loadEnrollments();
-      alert(`Progress updated to ${newProgress}%! 📈`);
+      
+      if (newProgress === 100) {
+        alert('🎉 Congratulations! You have completed this course! 🏆');
+      } else {
+        alert(`Progress updated to ${newProgress}%! 📈`);
+      }
     } catch (error) {
       console.error('Error updating progress:', error);
       if (error.code === 'permission-denied') {
@@ -445,6 +477,75 @@ function StudentPortal({ user, userRole }) {
         alert('Error updating progress. Please try again.');
       }
     }
+  };
+
+  const handleReviewCourse = (courseId) => {
+    alert('📚 Opening course materials for review...');
+  };
+
+  const handleGetCertificate = async (course, enrollment) => {
+    try {
+      // Check if certificate already requested
+      const existingCertificate = certificates.find(cert => 
+        cert.courseId === course.id && cert.studentId === user.uid
+      );
+
+      if (existingCertificate) {
+        if (existingCertificate.status === 'verified') {
+          // Show verified certificate
+          setSelectedCertificate(existingCertificate);
+          setShowCertificateModal(true);
+        } else if (existingCertificate.status === 'pending') {
+          alert('⏳ Your certificate request is pending admin verification. Please wait for approval.');
+        } else if (existingCertificate.status === 'rejected') {
+          alert(`❌ Your certificate request was rejected. Reason: ${existingCertificate.rejectionReason || 'No reason provided'}`);
+        }
+        return;
+      }
+
+      // Request new certificate
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const userData = userDoc.data();
+
+      const certificateData = {
+        studentId: user.uid,
+        studentName: userData.name || user.email,
+        studentEmail: user.email,
+        courseId: course.id,
+        courseName: course.title,
+        completedAt: enrollment.completedAt || new Date(),
+        requestedAt: new Date(),
+        status: 'pending'
+      };
+
+      await addDoc(collection(db, 'certificates'), certificateData);
+      await loadCertificates();
+
+      alert('🎓 Certificate request submitted successfully! It will be available for download once verified by an administrator.');
+    } catch (error) {
+      console.error('Error requesting certificate:', error);
+      if (error.code === 'permission-denied') {
+        alert('You do not have permission to request certificates. Please check your role.');
+      } else {
+        alert('Error requesting certificate. Please try again.');
+      }
+    }
+  };
+
+  const handleDownloadCertificate = () => {
+    // This would typically generate a PDF
+    // For now, we'll use print functionality
+    window.print();
+  };
+
+  const getMyCertificates = () => {
+    return certificates.map(cert => {
+      const course = courses.find(c => c.id === cert.courseId);
+      return {
+        ...cert,
+        courseTitle: course?.title || cert.courseName
+      };
+    });
   };
 
   if (loading) {
@@ -576,6 +677,14 @@ function StudentPortal({ user, userRole }) {
             </li>
             <li className="nav-item">
               <button 
+                className={`nav-link ${activeTab === 'certificates' ? 'active' : ''}`}
+                onClick={() => setActiveTab('certificates')}
+              >
+                🎓 My Certificates
+              </button>
+            </li>
+            <li className="nav-item">
+              <button 
                 className={`nav-link ${activeTab === 'progress' ? 'active' : ''}`}
                 onClick={() => setActiveTab('progress')}
               >
@@ -636,56 +745,96 @@ function StudentPortal({ user, userRole }) {
           {activeTab === 'enrolled' && (
             <div className="row">
               {getEnrolledCourses().length > 0 ? (
-                getEnrolledCourses().map(course => (
-                  <div key={course.id} className="col-md-6 col-lg-4 mb-4">
-                    <div className="card h-100 shadow-sm border-0">
-                      <div className="card-body">
-                        <h5 className="card-title">{course.title}</h5>
-                        <p className="card-text text-muted">{course.description}</p>
-                        
-                        <div className="mb-3">
-                          <small className="text-muted d-block">Progress</small>
-                          <div className="progress mb-2">
-                            <div 
-                              className="progress-bar" 
-                              style={{ width: `${course.enrollmentProgress || 0}%` }}
-                            >
-                              {course.enrollmentProgress || 0}%
+                getEnrolledCourses().map(course => {
+                  const isCompleted = course.enrollmentProgress === 100 || course.completed;
+                  const enrollment = enrollments.find(e => e.courseId === course.id);
+                  
+                  return (
+                    <div key={course.id} className="col-md-6 col-lg-4 mb-4">
+                      <div className="card h-100 shadow-sm border-0">
+                        <div className="card-body">
+                          <h5 className="card-title">{course.title}</h5>
+                          <p className="card-text text-muted">{course.description}</p>
+                          
+                          <div className="mb-3">
+                            <small className="text-muted d-block">Progress</small>
+                            <div className="progress mb-2">
+                              <div 
+                                className={`progress-bar ${isCompleted ? 'bg-primary' : 'bg-success'}`}
+                                style={{ width: `${course.enrollmentProgress || 0}%` }}
+                              >
+                                {course.enrollmentProgress || 0}%
+                              </div>
                             </div>
                           </div>
-                        </div>
-                        
-                        {/* Learning Materials */}
-                        {course.materials && course.materials.length > 0 && (
-                          <div className="mb-3">
-                            <small className="text-muted d-block mb-2">📎 Learning Materials</small>
-                            {course.materials.map((material, index) => (
-                              <div key={index} className="mb-1">
-                                <a 
-                                  href={material.url} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="btn btn-outline-primary btn-sm w-100 text-start"
+                          
+                          {course.materials && course.materials.length > 0 && (
+                            <div className="mb-3">
+                              <small className="text-muted d-block mb-2">📎 Learning Materials</small>
+                              {course.materials.map((material, index) => (
+                                <div key={index} className="mb-1">
+                                  <a 
+                                    href={material.url} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="btn btn-outline-primary btn-sm w-100 text-start"
+                                  >
+                                    {material.type === 'video' ? '🎥' : 
+                                     material.type === 'document' ? '📄' :
+                                     material.type === 'presentation' ? '📊' : '🎵'} {material.title}
+                                  </a>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          
+                          {!isCompleted ? (
+                            <button 
+                              className="btn btn-success w-100"
+                              onClick={() => handleContinueLearning(course)}
+                            >
+                              📚 Continue Learning
+                            </button>
+                          ) : (
+                            <div>
+                              <button 
+                                className="btn btn-primary w-100 mb-2"
+                                disabled
+                                style={{ opacity: 0.9 }}
+                              >
+                                ✅ Course Completed
+                              </button>
+                              
+                              <div className="d-flex gap-2 mb-2">
+                                <button 
+                                  className="btn btn-warning flex-fill"
+                                  onClick={() => handleGetCertificate(course, enrollment)}
                                 >
-                                  {material.type === 'video' ? '🎥' : 
-                                   material.type === 'document' ? '📄' :
-                                   material.type === 'presentation' ? '📊' : '🎵'} {material.title}
-                                </a>
+                                  🎓 Get Certificate
+                                </button>
+                                
+                                <button 
+                                  className="btn btn-outline-secondary flex-fill"
+                                  onClick={() => handleReviewCourse(course.id)}
+                                >
+                                  🔄 Review
+                                </button>
                               </div>
-                            ))}
-                          </div>
-                        )}
-                        
-                        <button 
-                          className="btn btn-success w-100"
-                          onClick={() => handleContinueLearning(course)}
-                        >
-                          📚 Continue Learning
-                        </button>
+                              
+                              {course.completedAt && (
+                                <small className="text-muted d-block text-center fst-italic">
+                                  Completed: {course.completedAt?.toDate ? 
+                                    course.completedAt.toDate().toLocaleDateString() : 
+                                    new Date(course.completedAt).toLocaleDateString()}
+                                </small>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="col-12">
                   <div className="text-center py-5">
@@ -822,7 +971,99 @@ function StudentPortal({ user, userRole }) {
             </div>
           )}
 
-          {/* Progress Tab - FIXED VERSION */}
+          {/* Certificates Tab */}
+          {activeTab === 'certificates' && (
+            <div className="row">
+              {getMyCertificates().length > 0 ? (
+                getMyCertificates().map(certificate => (
+                  <div key={certificate.id} className="col-md-6 col-lg-4 mb-4">
+                    <div className="card h-100 shadow-sm border-0">
+                      <div className="card-body">
+                        <div className="text-center mb-3">
+                          <div style={{ fontSize: '3rem' }}>🎓</div>
+                        </div>
+                        <h5 className="card-title text-center">{certificate.courseTitle}</h5>
+                        
+                        <div className="mb-3">
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <span className="text-muted">Status:</span>
+                            <span className={`badge ${
+                              certificate.status === 'verified' ? 'bg-success' :
+                              certificate.status === 'pending' ? 'bg-warning' : 'bg-danger'
+                            }`}>
+                              {certificate.status === 'verified' ? '✅ Verified' :
+                               certificate.status === 'pending' ? '⏳ Pending' : '❌ Rejected'}
+                            </span>
+                          </div>
+                          
+                          {certificate.certificateNumber && (
+                            <div className="text-center mb-2">
+                              <small className="text-muted d-block">Certificate Number</small>
+                              <code className="small">{certificate.certificateNumber}</code>
+                            </div>
+                          )}
+                          
+                          <small className="text-muted d-block">
+                            Completed: {certificate.completedAt?.toDate ? 
+                              certificate.completedAt.toDate().toLocaleDateString() : 
+                              'N/A'
+                            }
+                          </small>
+                          
+                          <small className="text-muted d-block">
+                            Requested: {certificate.requestedAt?.toDate ? 
+                              certificate.requestedAt.toDate().toLocaleDateString() : 
+                              'N/A'
+                            }
+                          </small>
+
+                          {certificate.status === 'rejected' && certificate.rejectionReason && (
+                            <div className="alert alert-danger mt-2 small">
+                              <strong>Reason:</strong> {certificate.rejectionReason}
+                            </div>
+                          )}
+                        </div>
+                        
+                        {certificate.status === 'verified' && (
+                          <button 
+                            className="btn btn-primary w-100"
+                            onClick={() => {
+                              setSelectedCertificate(certificate);
+                              setShowCertificateModal(true);
+                            }}
+                          >
+                            👁️ View & Download
+                          </button>
+                        )}
+
+                        {certificate.status === 'pending' && (
+                          <button className="btn btn-secondary w-100" disabled>
+                            ⏳ Awaiting Verification
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="col-12">
+                  <div className="text-center py-5">
+                    <div className="mb-3" style={{ fontSize: '3rem' }}>🎓</div>
+                    <h5>No certificates yet</h5>
+                    <p className="text-muted">Complete courses to request certificates</p>
+                    <button 
+                      className="btn btn-primary"
+                      onClick={() => setActiveTab('enrolled')}
+                    >
+                      📚 View My Courses
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Progress Tab */}
           {activeTab === 'progress' && (
             <div className="row">
               <div className="col-lg-8">
@@ -834,15 +1075,20 @@ function StudentPortal({ user, userRole }) {
                     {getEnrolledCourses().length > 0 ? (
                       getEnrolledCourses().map(course => {
                         const enrollment = enrollments.find(e => e.courseId === course.id);
+                        const isCompleted = course.enrollmentProgress === 100 || course.completed;
+                        
                         return (
                           <div key={course.id} className="mb-4">
                             <div className="d-flex justify-content-between align-items-center mb-2">
                               <h6 className="mb-0">{course.title}</h6>
-                              <span className="badge bg-primary">{course.enrollmentProgress || 0}%</span>
+                              <div className="d-flex align-items-center gap-2">
+                                {isCompleted && <span className="badge bg-success">✅ Completed</span>}
+                                <span className="badge bg-primary">{course.enrollmentProgress || 0}%</span>
+                              </div>
                             </div>
                             <div className="progress mb-2">
                               <div 
-                                className="progress-bar" 
+                                className={`progress-bar ${isCompleted ? 'bg-primary' : 'bg-success'}`}
                                 style={{ width: `${course.enrollmentProgress || 0}%` }}
                               ></div>
                             </div>
@@ -853,6 +1099,12 @@ function StudentPortal({ user, userRole }) {
                                   new Date(enrollment.enrolledAt).toLocaleDateString() :
                                   'Unknown date'
                               }
+                              {isCompleted && course.completedAt && (
+                                <> • Completed: {course.completedAt?.toDate ? 
+                                  course.completedAt.toDate().toLocaleDateString() : 
+                                  new Date(course.completedAt).toLocaleDateString()}
+                                </>
+                              )}
                             </small>
                           </div>
                         );
@@ -873,10 +1125,28 @@ function StudentPortal({ user, userRole }) {
                     <h5 className="card-title mb-0">🏆 Achievements</h5>
                   </div>
                   <div className="card-body">
-                    <div className="text-center py-4">
-                      <div className="mb-2" style={{ fontSize: '2rem' }}>🏆</div>
-                      <p className="text-muted">Complete courses to earn achievements</p>
-                    </div>
+                    {getEnrolledCourses().filter(c => c.completed || c.enrollmentProgress === 100).length > 0 ? (
+                      <div>
+                        <div className="text-center mb-3">
+                          <div style={{ fontSize: '3rem' }}>🎓</div>
+                          <h6>Courses Completed</h6>
+                          <div className="display-4 text-primary">
+                            {getEnrolledCourses().filter(c => c.completed || c.enrollmentProgress === 100).length}
+                          </div>
+                        </div>
+                        <hr />
+                        {getEnrolledCourses().filter(c => c.completed || c.enrollmentProgress === 100).map(course => (
+                          <div key={course.id} className="mb-2">
+                            <small className="text-success">✅ {course.title}</small>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-4">
+                        <div className="mb-2" style={{ fontSize: '2rem' }}>🏆</div>
+                        <p className="text-muted">Complete courses to earn achievements</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -910,6 +1180,8 @@ function StudentPortal({ user, userRole }) {
                       <tbody>
                         {enrollments.map(enrollment => {
                           const course = courses.find(c => c.id === enrollment.courseId);
+                          const isCompleted = enrollment.progress === 100 || enrollment.completed;
+                          
                           return (
                             <tr key={enrollment.id}>
                               <td>{enrollment.studentName || 'Unknown Student'}</td>
@@ -921,11 +1193,12 @@ function StudentPortal({ user, userRole }) {
                                 }`}>
                                   {enrollment.status}
                                 </span>
+                                {isCompleted && <span className="badge bg-primary ms-1">✅ Completed</span>}
                               </td>
                               <td>
                                 <div className="progress" style={{ width: '100px' }}>
                                   <div 
-                                    className="progress-bar" 
+                                    className={`progress-bar ${isCompleted ? 'bg-primary' : ''}`}
                                     style={{ width: `${enrollment.progress || 0}%` }}
                                   ></div>
                                 </div>
@@ -1077,6 +1350,124 @@ function StudentPortal({ user, userRole }) {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Certificate Modal */}
+      {showCertificateModal && selectedCertificate && (
+        <div className="modal d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog modal-lg">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">🎓 Certificate of Completion</h5>
+                <button 
+                  type="button" 
+                  className="btn-close" 
+                  onClick={() => {
+                    setShowCertificateModal(false);
+                    setSelectedCertificate(null);
+                  }}
+                ></button>
+              </div>
+              <div className="modal-body">
+                <div 
+                  ref={certificateRef} 
+                  className="certificate-content border rounded p-5" 
+                  style={{ 
+                    backgroundColor: '#ffffff',
+                    minHeight: '600px',
+                    position: 'relative',
+                    backgroundImage: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)'
+                  }}
+                >
+                  <div className="text-center">
+                    {/* Header */}
+                    <div className="mb-4">
+                      <h1 className="display-4 text-primary mb-3" style={{ fontFamily: 'serif' }}>
+                        🎓 Certificate of Completion
+                      </h1>
+                      <div className="border-top border-bottom border-primary py-2">
+                        <p className="text-muted mb-0">This is to certify that</p>
+                      </div>
+                    </div>
+
+                    {/* Student Name */}
+                    <h2 className="display-5 my-4" style={{ fontFamily: 'cursive', color: '#2c3e50' }}>
+                      {selectedCertificate.studentName}
+                    </h2>
+
+                    {/* Course Info */}
+                    <p className="text-muted mb-3">has successfully completed the course</p>
+                    <h3 className="text-primary mb-4" style={{ fontFamily: 'serif' }}>
+                      {selectedCertificate.courseTitle}
+                    </h3>
+
+                    {/* Completion Date */}
+                    <div className="my-4">
+                      <p className="mb-1"><strong>Date of Completion:</strong></p>
+                      <p className="text-muted">
+                        {selectedCertificate.completedAt?.toDate ? 
+                          selectedCertificate.completedAt.toDate().toLocaleDateString('en-US', { 
+                            year: 'numeric', 
+                            month: 'long', 
+                            day: 'numeric' 
+                          }) : 
+                          'N/A'
+                        }
+                      </p>
+                    </div>
+
+                    {/* Certificate Number */}
+                    <div className="mt-5">
+                      <p className="mb-1"><small className="text-muted">Certificate Number:</small></p>
+                      <p><code className="h6">{selectedCertificate.certificateNumber}</code></p>
+                    </div>
+
+                    {/* Signature Line */}
+                    <div className="row justify-content-around mt-5 pt-4">
+                      <div className="col-md-5">
+                        <div className="border-top border-dark pt-2">
+                          <p className="mb-0"><small>Authorized Signature</small></p>
+                        </div>
+                      </div>
+                      <div className="col-md-5">
+                        <div className="border-top border-dark pt-2">
+                          <p className="mb-0"><small>Date Issued</small></p>
+                          <p className="mb-0">
+                            <small>
+                              {selectedCertificate.verifiedAt?.toDate ? 
+                                selectedCertificate.verifiedAt.toDate().toLocaleDateString() : 
+                                'N/A'
+                              }
+                            </small>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  onClick={() => {
+                    setShowCertificateModal(false);
+                    setSelectedCertificate(null);
+                  }}
+                >
+                  Close
+                </button>
+                <button 
+                  type="button" 
+                  className="btn btn-primary"
+                  onClick={handleDownloadCertificate}
+                >
+                  🖨️ Print / Download
+                </button>
+              </div>
             </div>
           </div>
         </div>
